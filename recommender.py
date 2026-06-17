@@ -12,60 +12,14 @@ ratings = pd.read_csv("data/ratings.csv")
 tags = pd.read_csv("data/tags.csv")
 
 # ==========================================
-# DATASET OVERVIEW
+# AVERAGE RATINGS
 # ==========================================
 
-print("\n=== MOVIES DATA ===")
-print(movies.head())
-
-print("\n=== RATINGS DATA ===")
-print(ratings.head())
-
-print("\n=== TAGS DATA ===")
-print(tags.head())
-
-print("\n=== DATASET SHAPES ===")
-print("Movies:", movies.shape)
-print("Ratings:", ratings.shape)
-print("Tags:", tags.shape)
-
-# ==========================================
-# GENRE ANALYSIS
-# ==========================================
-
-genre_counts = {}
-
-for genres in movies["genres"]:
-
-    genre_list = genres.split("|")
-
-    for genre in genre_list:
-
-        if genre not in genre_counts:
-            genre_counts[genre] = 1
-        else:
-            genre_counts[genre] += 1
-
-print("\n=== TOP 10 GENRES ===")
-
-sorted_genres = sorted(
-    genre_counts.items(),
-    key=lambda x: x[1],
-    reverse=True
+average_ratings = (
+    ratings.groupby("movieId")["rating"]
+    .mean()
+    .reset_index()
 )
-
-for genre, count in sorted_genres[:10]:
-    print(f"{genre}: {count}")
-
-# ==========================================
-# AVERAGE MOVIE RATINGS
-# ==========================================
-
-average_ratings = ratings.groupby(
-    "movieId"
-)["rating"].mean()
-
-average_ratings = average_ratings.reset_index()
 
 average_ratings.rename(
     columns={"rating": "avg_rating"},
@@ -82,16 +36,14 @@ movies_with_ratings = movies.merge(
 # PROCESS TAGS
 # ==========================================
 
-movie_tags = tags.groupby(
-    "movieId"
-)["tag"].apply(
-    lambda x: " ".join(
-        str(tag)
-        for tag in x
+movie_tags = (
+    tags.groupby("movieId")["tag"]
+    .apply(
+        lambda x:
+        " ".join(str(tag) for tag in x)
     )
+    .reset_index()
 )
-
-movie_tags = movie_tags.reset_index()
 
 movie_tags.rename(
     columns={"tag": "combined_tags"},
@@ -129,7 +81,7 @@ movies["features"] = (
 )
 
 # ==========================================
-# TF-IDF
+# CONTENT-BASED RECOMMENDER
 # ==========================================
 
 tfidf = TfidfVectorizer(
@@ -140,18 +92,10 @@ tfidf_matrix = tfidf.fit_transform(
     movies["features"]
 )
 
-# ==========================================
-# COSINE SIMILARITY
-# ==========================================
-
 cosine_sim = cosine_similarity(
     tfidf_matrix,
     tfidf_matrix
 )
-
-# ==========================================
-# MOVIE LOOKUP TABLE
-# ==========================================
 
 movie_indices = pd.Series(
     movies.index,
@@ -159,7 +103,35 @@ movie_indices = pd.Series(
 )
 
 # ==========================================
-# TOP MOVIES BY GENRE
+# COLLABORATIVE FILTERING
+# ==========================================
+
+movie_matrix = ratings.pivot_table(
+    index="userId",
+    columns="movieId",
+    values="rating"
+)
+
+movie_similarity = (
+    movie_matrix.corr()
+)
+
+# ==========================================
+# LOOKUP TABLES
+# ==========================================
+
+title_to_movieid = pd.Series(
+    movies["movieId"].values,
+    index=movies["title"]
+)
+
+movieid_to_title = pd.Series(
+    movies["title"].values,
+    index=movies["movieId"]
+)
+
+# ==========================================
+# TOP GENRE RECOMMENDER
 # ==========================================
 
 def recommend_top_genre(
@@ -182,7 +154,11 @@ def recommend_top_genre(
     )
 
     return filtered[
-        ["title", "genres", "avg_rating"]
+        [
+            "title",
+            "genres",
+            "avg_rating"
+        ]
     ].head(n)
 
 # ==========================================
@@ -211,7 +187,9 @@ def recommend_similar_movies(
         reverse=True
     )
 
-    sim_scores = sim_scores[1:n+1]
+    sim_scores = sim_scores[
+        1:n+1
+    ]
 
     movie_ids = [
         score[0]
@@ -223,12 +201,16 @@ def recommend_similar_movies(
         for score in sim_scores
     ]
 
-    recommendations = movies.iloc[
-        movie_ids
-    ][[
-        "title",
-        "genres"
-    ]].copy()
+    recommendations = (
+        movies.iloc[movie_ids]
+        [
+            [
+                "title",
+                "genres"
+            ]
+        ]
+        .copy()
+    )
 
     recommendations[
         "similarity"
@@ -237,47 +219,176 @@ def recommend_similar_movies(
     return recommendations
 
 # ==========================================
-# TESTS
+# COLLABORATIVE RECOMMENDER
 # ==========================================
 
-print("\n=== TOP SCI-FI MOVIES ===")
-print(
-    recommend_top_genre(
-        "Sci-Fi"
+def recommend_collaborative(
+    movie_title,
+    n=10
+):
+
+    if movie_title not in (
+        title_to_movieid.index
+    ):
+        return None
+
+    movie_id = (
+        title_to_movieid[
+            movie_title
+        ]
     )
+
+    if movie_id not in (
+        movie_similarity.columns
+    ):
+        return None
+
+    similar_movies = (
+        movie_similarity[
+            movie_id
+        ]
+        .sort_values(
+            ascending=False
+        )
+    )
+
+    similar_movies = (
+        similar_movies.iloc[
+            1:n+1
+        ]
+    )
+
+    results = []
+
+    for movie_id, score in (
+        similar_movies.items()
+    ):
+
+        results.append(
+            {
+                "title":
+                movieid_to_title[
+                    movie_id
+                ],
+
+                "correlation":
+                round(
+                    score,
+                    3
+                )
+            }
+        )
+
+    return pd.DataFrame(
+        results
+    )
+
+# ==========================================
+# TEST EXAMPLES
+# ==========================================
+
+print(
+    "\n=== CONTENT BASED ==="
 )
 
-print("\n=== MOVIES SIMILAR TO TOY STORY ===")
 print(
     recommend_similar_movies(
         "Toy Story (1995)"
     )
 )
 
+print(
+    "\n=== COLLABORATIVE ==="
+)
+
+print(
+    recommend_collaborative(
+        "Toy Story (1995)"
+    )
+)
+
 # ==========================================
-# INTERACTIVE MODE
+# INTERACTIVE MENU
 # ==========================================
 
 while True:
 
-    movie_name = input(
-        "\nEnter a movie title (or quit): "
+    print(
+        "\nMovie Recommendation System"
     )
 
-    if movie_name.lower() == "quit":
+    print(
+        "1. Content-Based"
+    )
+
+    print(
+        "2. Collaborative"
+    )
+
+    print(
+        "3. Top Genre Movies"
+    )
+
+    print(
+        "4. Quit"
+    )
+
+    choice = input(
+        "\nSelect option: "
+    )
+
+    if choice == "1":
+
+        movie = input(
+            "Movie title: "
+        )
+
+        result = (
+            recommend_similar_movies(
+                movie
+            )
+        )
+
+        print(result)
+
+    elif choice == "2":
+
+        movie = input(
+            "Movie title: "
+        )
+
+        result = (
+            recommend_collaborative(
+                movie
+            )
+        )
+
+        print(result)
+
+    elif choice == "3":
+
+        genre = input(
+            "Genre: "
+        )
+
+        result = (
+            recommend_top_genre(
+                genre
+            )
+        )
+
+        print(result)
+
+    elif choice == "4":
+
+        print(
+            "Goodbye!"
+        )
+
         break
 
-    recommendations = (
-        recommend_similar_movies(
-            movie_name
-        )
-    )
-
-    if recommendations is None:
-        print("Movie not found.")
     else:
+
         print(
-            recommendations.to_string(
-                index=False
-            )
+            "Invalid option."
         )
